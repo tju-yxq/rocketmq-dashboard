@@ -41,6 +41,7 @@ import org.mockito.MockedConstruction;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -159,8 +160,9 @@ class RocketMQMessageProviderTest {
     }
 
     @Test
-    void queryByTopicReturnsNewestMessagesFirst() throws Exception {
-        MessageQueue queue = new MessageQueue("TopicA", "broker-a", 0);
+    void queryByTopicSortsMessagesAcrossQueuesNewestFirst() throws Exception {
+        MessageQueue olderQueue = new MessageQueue("TopicA", "broker-a", 0);
+        MessageQueue newerQueue = new MessageQueue("TopicA", "broker-a", 1);
         MessageExt older = new MessageExt();
         older.setMsgId("older");
         older.setTopic("TopicA");
@@ -169,14 +171,19 @@ class RocketMQMessageProviderTest {
         newer.setMsgId("newer");
         newer.setTopic("TopicA");
         newer.setStoreTimestamp(250L);
-        PullResult pullResult = new PullResult(PullStatus.FOUND, 11L, 10L, 11L,
-                List.of(older, newer));
+        PullResult olderPullResult = new PullResult(PullStatus.FOUND, 11L, 10L, 10L,
+                List.of(older));
+        PullResult newerPullResult = new PullResult(PullStatus.FOUND, 11L, 10L, 10L,
+                List.of(newer));
         try (MockedConstruction<DefaultMQPullConsumer> ignored =
                      mockConstruction(DefaultMQPullConsumer.class, (consumer, context) -> {
                          doNothing().when(consumer).start();
-                         when(consumer.fetchSubscribeMessageQueues("TopicA")).thenReturn(Set.of(queue));
-                         when(consumer.searchOffset(eq(queue), anyLong())).thenReturn(10L);
-                         when(consumer.pull(queue, "*", 10L, 32)).thenReturn(pullResult);
+                         when(consumer.fetchSubscribeMessageQueues("TopicA"))
+                                 .thenReturn(new LinkedHashSet<>(List.of(olderQueue, newerQueue)));
+                         when(consumer.searchOffset(eq(olderQueue), anyLong())).thenReturn(10L);
+                         when(consumer.searchOffset(eq(newerQueue), anyLong())).thenReturn(10L);
+                         when(consumer.pull(olderQueue, "*", 10L, 32)).thenReturn(olderPullResult);
+                         when(consumer.pull(newerQueue, "*", 10L, 32)).thenReturn(newerPullResult);
                          doNothing().when(consumer).shutdown();
                      })) {
             List<MessageRecordVO> messages = provider.queryMessages(
